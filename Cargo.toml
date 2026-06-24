@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
-csv = "1.4.0"
 fuzzy-matcher = "0.3.7"
 log = "0.4.33"
 pastel_colours = "0.2.0"
