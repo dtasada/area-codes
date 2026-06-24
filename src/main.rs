@@ -325,6 +325,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stdin = termion::async_stdin().keys();
     loop {
         let random_country = codes.choose(&mut rand::rng()).unwrap();
+        match random_country.country_name {
+            "idk" | "exit" => continue,
+            _ => {}
+        }
+
         let question = format!(
             "What is the corresponding country for area code{} +{}?",
             if random_country.num_codes.len() > 1 {
@@ -344,32 +349,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None => continue,
         };
 
-        match answer.country_name {
-            "idk" => continue,
-            "exit" => return Ok(()),
-            _ => {}
+        if answer.country_name == "exit" {
+            return Ok(());
         }
 
         let correct_answers = code_map.get(&random_country.num_codes).unwrap();
 
-        feedback = if correct_answers.contains(&answer) {
-            "\x1b[1;32mcorrect answer!\x1b[0m".to_string()
-        } else {
-            format!(
-                "\x1b[1;31mwrong answer. Area code{} +{} correspond{} to {}.\x1b[0m",
-                if random_country.num_codes.len() > 1 {
-                    "s"
-                } else {
-                    ""
-                },
-                random_country.num_codes.join(", +"),
-                if random_country.num_codes.len() > 1 {
-                    ""
-                } else {
-                    "s"
-                },
-                random_country.country_name
-            )
-        }
+        feedback = format!(
+            "{} answer. Area code{} +{} correspond{} to {}.\x1b[0m",
+            if correct_answers.contains(&answer) {
+                "\x1b[1;32mCorrect"
+            } else {
+                "\x1b[1;31mWrong"
+            },
+            if random_country.num_codes.len() > 1 {
+                "s"
+            } else {
+                ""
+            },
+            random_country.num_codes.join(", +"),
+            if random_country.num_codes.len() > 1 {
+                ""
+            } else {
+                "s"
+            },
+            correct_answers
+                .iter()
+                .map(|ans| ans.country_name)
+                .collect::<Vec<&'static str>>()
+                .join(", ")
+        );
     }
 }
