@@ -7,9 +7,6 @@ use pastel_colours::{
 };
 use std::io::{Stdout, Write, stdout};
 use std::time::Instant;
-use termion::clear::CurrentLine;
-use termion::cursor::DetectCursorPos;
-use termion::cursor::Show;
 use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::{IntoRawMode, RawTerminal};
@@ -24,11 +21,9 @@ where
     search_term: String,
     all_items: Vec<Item<T>>,
     matches: Vec<Item<T>>,
-    console_offset: u16,
     stdout: RawTerminal<Stdout>,
     first: bool,
     list: List<T>,
-    positive_space_remaining: u16,
 }
 
 impl<T> FuzzyFinder<T>
@@ -36,39 +31,15 @@ where
     T: Clone,
 {
     fn new(functions: Vec<Item<T>>, lines_to_show: i8) -> Self {
-        // We need to know where to start rendering from. We can't do this later because
-        // we overwrite the cursor. Maybe we shouldn't do this? (TODO)
-        let mut stdout = stdout().into_raw_mode().unwrap();
-
-        write!(stdout, "{}", termion::cursor::Save).unwrap();
-        let mut positive_space_remaining = 0;
-        let console_offset = if stdout.cursor_pos().is_ok() {
-            let cursor_pos_y = stdout.cursor_pos().unwrap().1;
-
-            let terminal_height = termion::terminal_size().unwrap().1;
-            let starting_y = cursor_pos_y;
-            let ending_y = starting_y + lines_to_show as u16;
-            let space_remaining: i16 = terminal_height as i16 - ending_y as i16;
-            positive_space_remaining = if space_remaining < 0 {
-                space_remaining.abs().try_into().unwrap()
-            } else {
-                0
-            };
-            cursor_pos_y
-        } else {
-            log::error!("Cannot get cursor!");
-            0
-        };
+        let stdout = stdout().into_raw_mode().unwrap();
 
         FuzzyFinder {
             search_term: String::from(""),
             all_items: functions,
             matches: vec![],
-            console_offset,
             stdout,
             first: true,
             list: List::new(lines_to_show),
-            positive_space_remaining,
         }
     }
 
@@ -104,11 +75,9 @@ where
     }
 
     fn render_space(&mut self) -> Result<()> {
-        // Drop down so we don't over-write the terminal line that instigated
-        // this run of lk.
         write!(self.stdout, "{}", termion::cursor::Save).unwrap();
         if self.first {
-            for _ in 0..self.list.lines_to_show {
+            for _ in 0..=self.list.lines_to_show {
                 writeln!(self.stdout, " ")?;
             }
             self.first = false
@@ -119,11 +88,7 @@ where
     }
 
     fn goto_start(&mut self) -> Result<()> {
-        write!(
-            self.stdout,
-            "{}",
-            termion::cursor::Goto(1, self.console_offset - self.positive_space_remaining)
-        )?;
+        write!(self.stdout, "\r")?;
         Ok(())
     }
 
@@ -156,21 +121,13 @@ where
     }
 
     fn render_prompt(&mut self) -> Result<()> {
-        // Render the prompt
-        let prompt_y = self.list.lines_to_show as u16 + 1;
-        let current_x = self.search_term.chars().count() + 2;
-
-        // Go to the bottom line, where we'll render the prompt
         write!(
             self.stdout,
-            "{CurrentLine}{}{CurrentLine}",
-            termion::cursor::Goto(current_x as u16, prompt_y + self.console_offset),
-        )?;
-        write!(
-            self.stdout,
-            "{Show}{}{BLUE_FG}${RESET_FG} {}",
-            termion::cursor::Goto(1, prompt_y + self.console_offset),
-            self.search_term
+            "\r{}{}{BLUE_FG}${RESET_FG} {}\r{}",
+            termion::clear::CurrentLine,
+            termion::cursor::Show,
+            self.search_term,
+            termion::cursor::Right((self.search_term.chars().count() + 2) as u16)
         )?;
         self.stdout.flush()?;
         Ok(())
@@ -203,22 +160,43 @@ where
 
     /// Renders the current result set
     pub fn render(&mut self) -> Result<()> {
+        if !self.first {
+            write!(
+                self.stdout,
+                "{}",
+                termion::cursor::Up(self.list.lines_to_show as u16)
+            )?;
+        }
         self.render_space()?;
         self.render_items()?;
         self.render_prompt()?;
         Ok(())
     }
+
+    pub fn clear_all_lines(&mut self) -> Result<()> {
+        let total_lines = self.list.lines_to_show as u16 + 3;
+        for i in 0..total_lines {
+            write!(self.stdout, "\r{}", termion::clear::CurrentLine)?;
+            if i < total_lines - 1 {
+                write!(self.stdout, "{}", termion::cursor::Up(1))?;
+            }
+        }
+        self.stdout.flush()?;
+        Ok(())
+    }
 }
 
 /// The main entry point for the fuzzy finder.
-pub fn find<T: std::clone::Clone>(items: Vec<Item<T>>, lines_to_show: i8) -> Result<Option<T>> {
+pub fn find<T: std::clone::Clone, R: Iterator<Item = std::result::Result<Key, std::io::Error>>>(
+    items: Vec<Item<T>>,
+    lines_to_show: i8,
+    stdin: &mut R,
+) -> Result<Option<T>> {
     let mut state = FuzzyFinder::new(items, lines_to_show);
 
     state.update_matches();
 
     state.render()?;
-
-    let mut stdin = termion::async_stdin().keys();
 
     // Run 'sed -n l' to explore escape codes
     let mut escaped = String::from("");
@@ -241,21 +219,29 @@ pub fn find<T: std::clone::Clone>(items: Vec<Item<T>>, lines_to_show: i8) -> Res
         if let Some(Ok(key)) = stdin.next() {
             match key {
                 // ctrl-c and ctrl-d are two ways to exit.
-                Key::Ctrl('c') => break,
-                Key::Ctrl('d') => break,
-
+                Key::Ctrl('c') | Key::Ctrl('d') => break,
+                Key::Ctrl('w') => {
+                    if !escaped.is_empty() {
+                        let mut split: Vec<&str> = escaped.split_whitespace().collect();
+                        split.pop();
+                        escaped = split.join(" ");
+                    }
+                }
+                Key::Ctrl('p') => {
+                    escaped = String::from("");
+                    state.up()?;
+                }
+                Key::Ctrl('n') => {
+                    escaped = String::from("");
+                    state.down()?;
+                }
                 // NB: It'd be neat if we could use Key::Up and Key::Down but they don't
                 // work in raw mode. So we've got to deal with the escape codes manually.
 
                 // This captures the enter key
                 Key::Char('\n') => {
+                    state.clear_all_lines()?;
                     return if !state.matches.is_empty() {
-                        // Tidy up the console lines we've been writing
-                        for _ in state.console_offset
-                            ..state.console_offset + state.list.lines_to_show as u16 + 4
-                        {
-                            write!(state.stdout, "{}", termion::clear::CurrentLine,)?;
-                        }
                         Ok(Some(
                             state.list.get_selected().item.as_ref().unwrap().to_owned(),
                         ))
@@ -302,6 +288,7 @@ pub fn find<T: std::clone::Clone>(items: Vec<Item<T>>, lines_to_show: i8) -> Res
             state.stdout.flush().unwrap();
         }
     }
+    state.clear_all_lines()?;
     Ok(None)
 }
 
@@ -369,7 +356,7 @@ mod tests {
         assert!(score2 > 0);
         // "AF" matches the alias "AF", name "Afghanistan" has "Af" which is case-insensitive match.
         // Wait, "Afghanistan" matches "AF" too! Let's choose an alias that is completely different.
-        
+
         let mut item = Item::new(
             "Switzerland".to_string(),
             vec!["CH".to_string(), "CHE".to_string()],
@@ -388,11 +375,7 @@ mod tests {
         // Search term "AU" matches both.
         // "AU" in "Austria" matches indices [0, 1].
         // "AU" in "AUT" is a closer match (start of a 3-letter word vs start of a 7-letter word), so should score higher.
-        let mut item = Item::new(
-            "Austria".to_string(),
-            vec!["AUT".to_string()],
-            (),
-        );
+        let mut item = Item::new("Austria".to_string(), vec!["AUT".to_string()], ());
         item.update_score("au", &matcher);
         assert!(item.score.is_some());
         let (score_at, indices_at) = item.score.unwrap();

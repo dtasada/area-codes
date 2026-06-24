@@ -1,6 +1,9 @@
 mod fzf;
 use std::collections::hash_map::HashMap;
 
+use rand::seq::IndexedRandom;
+use termion::input::TermRead;
+
 #[derive(Debug, Clone)]
 struct Code {
     country_name: String,
@@ -10,7 +13,7 @@ struct Code {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut codes: Vec<Code> = Vec::new();
-    let mut codes_fzf: Vec<fzf::Item<Code>> = Vec::new();
+    let mut codes_fzf: Vec<fzf::Item<&Code>> = Vec::new();
 
     let mut reader = csv::Reader::from_path("codes.csv")?;
     for result in reader.records() {
@@ -37,15 +40,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect::<Vec<String>>(),
         };
 
+        codes.push(code);
+    }
+
+    codes.push(Code {
+        country_name: "idk".to_string(),
+        iso_codes: Vec::new(),
+        num_codes: Vec::new(),
+    });
+
+    for code in &codes {
         codes_fzf.push(fzf::Item::new(
             code.country_name.clone(),
-            iso_codes,
-            code.clone(),
+            code.iso_codes.clone(),
+            code,
         ));
-        // for iso in &code.iso_codes {
-        //     codes_fzf.push(Item::new(iso.to_string(), code.clone()));
-        // }
-        codes.push(code);
     }
 
     // maps a country's name to its code struct
@@ -76,18 +85,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
 
-    println!("name_map: {:?}", code_map);
+    let mut feedback = "\n".to_string();
+    let mut stdin = termion::async_stdin().keys();
+    loop {
+        let random_country = codes.choose(&mut rand::rng()).unwrap();
+        let question = format!(
+            "What is the corresponding country for area code{} {}?",
+            if random_country.num_codes.len() > 1 {
+                "s"
+            } else {
+                ""
+            },
+            random_country.num_codes.join(", "),
+        );
 
-    let fzf = fzf::find(codes_fzf, 10)?;
-    let answer = match fzf {
-        Some(answer) => answer,
-        None => {
-            println!("answer please");
-            return Ok(());
+        println!("{}", feedback);
+        println!("{}", question);
+
+        let fzf = fzf::find(codes_fzf.clone(), 10, &mut stdin)?;
+        let answer = match fzf {
+            Some(answer) => answer,
+            None => return Ok(()),
+        };
+
+        if std::ptr::eq(answer, random_country) {
+            feedback = "\x1b[1;32mcorrect answer!\x1b[0m".to_string();
+        } else {
+            feedback = format!(
+                "\x1b[1;31mwrong answer. Area code{} {} corresponds to {}.\x1b[0m",
+                if random_country.num_codes.len() > 1 {
+                    "s"
+                } else {
+                    ""
+                },
+                random_country.num_codes.join(", "),
+                random_country.country_name
+            );
         }
-    };
-
-    println!("answer: {:?}", answer);
-
-    Ok(())
+    }
 }
