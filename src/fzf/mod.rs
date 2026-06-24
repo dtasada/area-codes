@@ -8,7 +8,6 @@ use pastel_colours::{
 use std::io::{Stdout, Write, stdout};
 use std::time::Instant;
 use termion::event::Key;
-use termion::input::TermRead;
 use termion::raw::{IntoRawMode, RawTerminal};
 
 pub mod item;
@@ -69,6 +68,18 @@ where
         if self.search_term.chars().count() > 0 {
             self.search_term =
                 String::from(&self.search_term[..self.search_term.chars().count() - 1]);
+        }
+        self.update_matches();
+        self.render()
+    }
+
+    pub fn delete_word(&mut self) -> Result<()> {
+        self.list.reset_selection();
+        let trimmed = self.search_term.trim_end();
+        if let Some(last_space_idx) = trimmed.rfind(char::is_whitespace) {
+            self.search_term = trimmed[..=last_space_idx].to_string();
+        } else {
+            self.search_term.clear();
         }
         self.update_matches();
         self.render()
@@ -221,11 +232,7 @@ pub fn find<T: std::clone::Clone, R: Iterator<Item = std::result::Result<Key, st
                 // ctrl-c and ctrl-d are two ways to exit.
                 Key::Ctrl('c') | Key::Ctrl('d') => break,
                 Key::Ctrl('w') => {
-                    if !escaped.is_empty() {
-                        let mut split: Vec<&str> = escaped.split_whitespace().collect();
-                        split.pop();
-                        escaped = split.join(" ");
-                    }
+                    state.delete_word()?;
                 }
                 Key::Ctrl('p') => {
                     escaped = String::from("");
