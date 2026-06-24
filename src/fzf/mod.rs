@@ -212,6 +212,7 @@ pub fn find<T: std::clone::Clone, R: Iterator<Item = std::result::Result<Key, st
     // Run 'sed -n l' to explore escape codes
     let mut escaped = String::from("");
     let mut instant = Instant::now();
+    let mut ctrl_c_count = 0;
 
     loop {
         // What's going on here? The problem is how we detect escape.
@@ -228,9 +229,27 @@ pub fn find<T: std::clone::Clone, R: Iterator<Item = std::result::Result<Key, st
         }
 
         if let Some(Ok(key)) = stdin.next() {
+            if key != Key::Ctrl('c') {
+                ctrl_c_count = 0;
+            }
             match key {
                 // ctrl-c and ctrl-d are two ways to exit.
-                Key::Ctrl('c') | Key::Ctrl('d') => break,
+                Key::Ctrl('c') => {
+                    ctrl_c_count += 1;
+                    if ctrl_c_count >= 2 {
+                        state.clear_all_lines()?;
+                        std::mem::drop(state);
+                        std::process::exit(0);
+                    }
+                    state.search_term.clear();
+                    state.update_matches();
+                    state.render()?;
+                }
+                Key::Ctrl('d') => {
+                    state.clear_all_lines()?;
+                    std::mem::drop(state);
+                    std::process::exit(0);
+                }
                 Key::Ctrl('w') => {
                     state.delete_word()?;
                 }
